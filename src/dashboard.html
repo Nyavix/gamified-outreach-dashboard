@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Gamified Outreach Dashboard</title>
+  <style>
+    :root { --bg:#0f1221; --card:#171a2b; --muted:#8f97b7; --text:#f2f4ff; --ok:#6ee7b7; --accent:#8b5cf6; --warn:#f59e0b; }
+    body { margin:0; font-family:Inter,system-ui,sans-serif; background:linear-gradient(120deg,#0b1020,#141a34); color:var(--text); }
+    .wrap{max-width:1100px;margin:24px auto;padding:0 16px;}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;}
+    .card{background:var(--card);border:1px solid #2a3158;border-radius:14px;padding:14px;}
+    h1{font-size:26px;margin:0 0 8px;} h2{font-size:16px;margin:0 0 8px;color:#d4d8ff;} p{color:var(--muted);margin:4px 0;}
+    .big{font-size:28px;font-weight:700;color:#fff;}
+    .bar{height:10px;background:#20274a;border-radius:999px;overflow:hidden}.fill{height:100%;background:linear-gradient(90deg,var(--ok),var(--accent));}
+    .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+    input,select{background:#0f1430;color:var(--text);border:1px solid #303a72;border-radius:10px;padding:8px}
+    button{background:var(--accent);color:#fff;border:0;border-radius:10px;padding:8px 12px;cursor:pointer}
+    button.secondary{background:#223063}
+    table{width:100%;border-collapse:collapse} th,td{padding:8px;border-bottom:1px solid #2b3153;font-size:14px;text-align:left}
+    .tag{font-size:12px;padding:4px 8px;border-radius:999px;background:#252d57;color:#dfe4ff}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>🚀 Arias Outreach Game Dashboard</h1>
+    <p>Goal: contact 20 businesses, book 3 calls, close 1 paid audit.</p>
+
+    <div class="grid">
+      <div class="card"><h2>Level</h2><div class="big" id="level">1</div><p><span id="xp">0</span> XP</p></div>
+      <div class="card"><h2>Streak</h2><div class="big" id="streak">0 days</div><p>Daily check-in keeps momentum</p></div>
+      <div class="card"><h2>Outreach Sent</h2><div class="big" id="sent">0</div><p>/ 20 target</p></div>
+      <div class="card"><h2>Calls Booked</h2><div class="big" id="calls">0</div><p>/ 3 target</p></div>
+    </div>
+
+    <div class="card" style="margin-top:12px;">
+      <h2>Mission Progress</h2>
+      <div class="bar"><div class="fill" id="progressFill" style="width:0%"></div></div>
+      <p id="progressText">0% complete</p>
+      <div class="row">
+        <button onclick="logAction('outreach')">+ Outreach Sent (+10 XP)</button>
+        <button class="secondary" onclick="logAction('call')">+ Call Booked (+35 XP)</button>
+        <button class="secondary" onclick="logAction('close')">+ Deal Closed (+100 XP)</button>
+        <button class="secondary" onclick="dailyCheckIn()">✅ Daily Check-in (+5 XP)</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:12px;">
+      <h2>Prospect Tracker</h2>
+      <div class="row" style="margin-bottom:8px;">
+        <input id="bizName" placeholder="Business name" />
+        <input id="bizNiche" placeholder="Niche" />
+        <select id="bizStatus"><option>Not Contacted</option><option>Messaged</option><option>Replied</option><option>Call Booked</option><option>Closed</option></select>
+        <button onclick="addProspect()">Add</button>
+      </div>
+      <table>
+        <thead><tr><th>Business</th><th>Niche</th><th>Status</th><th>Action</th></tr></thead>
+        <tbody id="prospects"></tbody>
+      </table>
+    </div>
+  </div>
+
+<script>
+  const key = 'arias_outreach_game_v1';
+  const state = JSON.parse(localStorage.getItem(key) || '{"xp":0,"sent":0,"calls":0,"closed":0,"streak":0,"lastCheck":"","prospects":[]}');
+
+  function levelFromXP(xp){ return Math.floor(xp/100)+1; }
+  function missionPercent(){
+    const outreach = Math.min(state.sent/20,1)*60;
+    const calls = Math.min(state.calls/3,1)*30;
+    const close = Math.min(state.closed/1,1)*10;
+    return Math.round(outreach+calls+close);
+  }
+  function save(){ localStorage.setItem(key, JSON.stringify(state)); render(); }
+
+  function logAction(type){
+    if(type==='outreach'){ state.sent++; state.xp += 10; }
+    if(type==='call'){ state.calls++; state.xp += 35; }
+    if(type==='close'){ state.closed = 1; state.xp += 100; }
+    save();
+  }
+
+  function dailyCheckIn(){
+    const today = new Date().toISOString().slice(0,10);
+    if(state.lastCheck===today) return alert('Already checked in today ✅');
+    state.lastCheck = today;
+    state.streak += 1;
+    state.xp += 5;
+    save();
+  }
+
+  function addProspect(){
+    const name = document.getElementById('bizName').value.trim();
+    const niche = document.getElementById('bizNiche').value.trim();
+    const status = document.getElementById('bizStatus').value;
+    if(!name) return;
+    state.prospects.push({name,niche,status});
+    document.getElementById('bizName').value='';
+    document.getElementById('bizNiche').value='';
+    save();
+  }
+
+  function removeProspect(i){ state.prospects.splice(i,1); save(); }
+
+  function render(){
+    document.getElementById('level').textContent = levelFromXP(state.xp);
+    document.getElementById('xp').textContent = state.xp;
+    document.getElementById('streak').textContent = state.streak + ' days';
+    document.getElementById('sent').textContent = state.sent;
+    document.getElementById('calls').textContent = state.calls;
+    const pct = missionPercent();
+    document.getElementById('progressFill').style.width = pct + '%';
+    document.getElementById('progressText').textContent = pct + '% complete';
+
+    const tbody = document.getElementById('prospects');
+    tbody.innerHTML = '';
+    state.prospects.forEach((p,i)=>{
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${p.name}</td><td><span class="tag">${p.niche||'—'}</span></td><td>${p.status}</td><td><button class="secondary" onclick="removeProspect(${i})">Remove</button></td>`;
+      tbody.appendChild(tr);
+    });
+  }
+  render();
+</script>
+</body>
+</html>

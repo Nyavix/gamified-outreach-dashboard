@@ -1,0 +1,8 @@
+{
+  "name": "gamified-outreach-dashboard",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "npx serve src -l 3000"
+  }
+}
