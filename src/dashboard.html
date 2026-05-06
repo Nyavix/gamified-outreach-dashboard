@@ -62,7 +62,30 @@
 
 <script>
   const key = 'arias_outreach_game_v1';
-  const state = JSON.parse(localStorage.getItem(key) || '{"xp":0,"sent":0,"calls":0,"closed":0,"streak":0,"lastCheck":"","prospects":[]}');
+  const seededProspects = [
+    ["Barren Ground Coffee","Cafe","Not Contacted"],
+    ["Birchwood Coffee","Cafe","Not Contacted"],
+    ["Bluebell Eatery","Restaurant","Not Contacted"],
+    ["Bullocks Bistro","Restaurant","Not Contacted"],
+    ["Copperhouse Eatery + Lounge","Restaurant","Not Contacted"],
+    ["Kamp Coffee","Cafe","Not Contacted"],
+    ["NWT Brewing Co. / Woodyard","Brewery/Restaurant","Not Contacted"],
+    ["Oak & Olive","Catering/Restaurant","Not Contacted"],
+    ["Sushi North","Restaurant","Not Contacted"],
+    ["The Black Knight Pub","Pub","Not Contacted"],
+    ["The Mantle Restaurant & Pub","Restaurant","Not Contacted"],
+    ["Trader’s Grill","Restaurant","Not Contacted"],
+    ["Wing Freak Inc.","Restaurant","Not Contacted"],
+    ["Ricky’s All Day Grill","Restaurant","Not Contacted"],
+    ["Chateau Nova Yellowknife","Hotel","Not Contacted"],
+    ["Nova Inn Yellowknife","Hotel","Not Contacted"],
+    ["Quality Inn & Suites Yellowknife","Hotel","Not Contacted"],
+    ["Super 8 Yellowknife","Hotel","Not Contacted"],
+    ["The Explorer Hotel","Hotel","Not Contacted"],
+    ["Discovery Inn","Hotel","Not Contacted"]
+  ].map(([name,niche,status]) => ({name,niche,status}));
+
+  const state = JSON.parse(localStorage.getItem(key) || JSON.stringify({"xp":0,"sent":0,"calls":0,"closed":0,"streak":0,"lastCheck":"","prospects":seededProspects}));
 
   function levelFromXP(xp){ return Math.floor(xp/100)+1; }
   function missionPercent(){
