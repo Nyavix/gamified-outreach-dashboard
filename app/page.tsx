@@ -249,7 +249,7 @@ export default function Page() {
   const [search, setSearch] = useState("");
   const [nicheFilter, setNicheFilter] = useState("All");
   const [copiedKey, setCopiedKey] = useState("");
-  const [activeTab, setActiveTab] = useState<"dashboard" | "prospects" | "service">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "prospects" | "service" | "alignment">("dashboard");
   const [slideDirection, setSlideDirection] = useState(1);
   const reduceMotion = useReducedMotion();
 
@@ -520,9 +520,14 @@ export default function Page() {
         animate: { opacity: 1, y: 0 },
       };
 
-  const switchTab = (nextTab: "dashboard" | "prospects" | "service") => {
+  const switchTab = (nextTab: "dashboard" | "prospects" | "service" | "alignment") => {
     if (nextTab === activeTab) return;
-    const order: Array<"dashboard" | "prospects" | "service"> = ["dashboard", "prospects", "service"];
+    const order: Array<"dashboard" | "prospects" | "service" | "alignment"> = [
+      "dashboard",
+      "prospects",
+      "service",
+      "alignment",
+    ];
     const currentIndex = order.indexOf(activeTab);
     const nextIndex = order.indexOf(nextTab);
     setSlideDirection(nextIndex > currentIndex ? 1 : -1);
@@ -605,6 +610,16 @@ export default function Page() {
           onClick={() => switchTab("service")}
         >
           Call Script
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "alignment"}
+          aria-controls="view-panel-alignment"
+          className={`tabBtn${activeTab === "alignment" ? " active" : ""}`}
+          onClick={() => switchTab("alignment")}
+        >
+          Alignment
         </button>
       </div>
 
@@ -1027,7 +1042,7 @@ export default function Page() {
         </div>
       </section>
           </motion.div>
-        ) : (
+        ) : activeTab === "service" ? (
           <motion.div
             key="service"
             id="view-panel-service"
@@ -1091,6 +1106,82 @@ export default function Page() {
                     <li><strong>“Need to think”</strong> → Offer a concise written audit + 10-min follow-up slot.</li>
                     <li><strong>“We already have a site”</strong> → Focus on conversion gaps, not redesign.</li>
                   </ul>
+                </article>
+              </div>
+            </section>
+          </motion.div>
+        ) : (
+          <motion.div
+            key="alignment"
+            id="view-panel-alignment"
+            role="tabpanel"
+            aria-label="Belief and alignment view"
+            className="tabPanel"
+            custom={slideDirection}
+            initial={
+              reduceMotion
+                ? { opacity: 0 }
+                : { opacity: 0, x: slideDirection > 0 ? 54 : -54 }
+            }
+            animate={{ opacity: 1, x: 0 }}
+            exit={
+              reduceMotion
+                ? { opacity: 0 }
+                : { opacity: 0, x: slideDirection > 0 ? -54 : 54 }
+            }
+            transition={{ duration: 0.28, ease: [0.2, 0.7, 0.2, 1] }}
+          >
+            <section className="card" aria-label="Sales alignment and confidence brief">
+              <div className="section-head">
+                <h2>Belief Deck: Why This Works</h2>
+                <span className="muted">Use before outreach to lock your energy in</span>
+              </div>
+
+              <div className="alignmentGrid">
+                <article className="alignmentBlock">
+                  <h3>What We’re Really Selling</h3>
+                  <ul>
+                    <li>We are not selling a website. We are selling clearer customer decisions.</li>
+                    <li>We are not pushing features. We are reducing booking friction.</li>
+                    <li>We are not begging for work. We are offering practical growth leverage.</li>
+                  </ul>
+                </article>
+
+                <article className="alignmentBlock">
+                  <h3>Problem Reality (Their Side)</h3>
+                  <ul>
+                    <li>Most local businesses lose leads through unclear offers and weak trust signals.</li>
+                    <li>They are busy, so gaps stay unfixed even when they know they exist.</li>
+                    <li>A clear outside audit saves them time and reveals hidden revenue leaks.</li>
+                  </ul>
+                </article>
+
+                <article className="alignmentBlock">
+                  <h3>Our Promise</h3>
+                  <ul>
+                    <li>Fast, specific, no-fluff audit focused on calls/bookings.</li>
+                    <li>Actionable fixes they can execute immediately.</li>
+                    <li>Optional implementation support only if they want help shipping.</li>
+                  </ul>
+                </article>
+
+                <article className="alignmentBlock">
+                  <h3>Pre-Call Confidence Script</h3>
+                  <p>
+                    “I’m here to create value first. I only need one yes at a time. The right client will feel relief,
+                    not pressure, when they hear this offer.”
+                  </p>
+                </article>
+
+                <article className="alignmentBlock full">
+                  <h3>5-Step Alignment Reset (60 seconds)</h3>
+                  <ol>
+                    <li><strong>Breathe:</strong> 4 seconds in, 4 seconds out, three rounds.</li>
+                    <li><strong>Intent:</strong> “I serve. I do not chase.”</li>
+                    <li><strong>Truth:</strong> Name one concrete result your audit can produce.</li>
+                    <li><strong>Focus:</strong> Pick the next single outreach action only.</li>
+                    <li><strong>Move:</strong> Send one message immediately before doubt returns.</li>
+                  </ol>
                 </article>
               </div>
             </section>
