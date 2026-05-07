@@ -234,6 +234,36 @@ p { color: var(--text-muted); margin: 4px 0; font-size: var(--fs-base); line-hei
   margin-top: 14px;
   will-change: transform, opacity;
 }
+.scriptGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 10px;
+}
+.scriptBlock {
+  background: rgba(11, 16, 36, 0.45);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  padding: 12px;
+}
+.scriptBlock h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: #eaf1ff;
+}
+.scriptBlock p,
+.scriptBlock li {
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.scriptBlock ul,
+.scriptBlock ol {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+}
 
 .mission { margin-top: 0; }
 .mission-head {
@@ -801,6 +831,7 @@ tbody tr.row-closed td:first-child {
   .panelGrid { grid-template-columns: 1fr; }
   .viewTabs { display: flex; width: 100%; }
   .tabBtn { flex: 1; }
+  .scriptGrid { grid-template-columns: 1fr; }
   .grid { gap: 10px; grid-template-columns: repeat(2, 1fr); }
   .card.stat { padding: 14px; }
   .big { font-size: var(--fs-xl); }

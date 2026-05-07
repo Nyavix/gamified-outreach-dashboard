@@ -249,7 +249,7 @@ export default function Page() {
   const [search, setSearch] = useState("");
   const [nicheFilter, setNicheFilter] = useState("All");
   const [copiedKey, setCopiedKey] = useState("");
-  const [activeTab, setActiveTab] = useState<"dashboard" | "prospects">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "prospects" | "service">("dashboard");
   const [slideDirection, setSlideDirection] = useState(1);
   const reduceMotion = useReducedMotion();
 
@@ -520,10 +520,11 @@ export default function Page() {
         animate: { opacity: 1, y: 0 },
       };
 
-  const switchTab = (nextTab: "dashboard" | "prospects") => {
+  const switchTab = (nextTab: "dashboard" | "prospects" | "service") => {
     if (nextTab === activeTab) return;
-    const currentIndex = activeTab === "dashboard" ? 0 : 1;
-    const nextIndex = nextTab === "dashboard" ? 0 : 1;
+    const order: Array<"dashboard" | "prospects" | "service"> = ["dashboard", "prospects", "service"];
+    const currentIndex = order.indexOf(activeTab);
+    const nextIndex = order.indexOf(nextTab);
     setSlideDirection(nextIndex > currentIndex ? 1 : -1);
     setActiveTab(nextTab);
   };
@@ -594,6 +595,16 @@ export default function Page() {
           onClick={() => switchTab("prospects")}
         >
           Prospect Tracker
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "service"}
+          aria-controls="view-panel-service"
+          className={`tabBtn${activeTab === "service" ? " active" : ""}`}
+          onClick={() => switchTab("service")}
+        >
+          Call Script
         </button>
       </div>
 
@@ -803,7 +814,7 @@ export default function Page() {
         </section>
       </motion.div>
           </motion.div>
-        ) : (
+        ) : activeTab === "prospects" ? (
           <motion.div
             key="prospects"
             id="view-panel-prospects"
@@ -1015,6 +1026,74 @@ export default function Page() {
           </table>
         </div>
       </section>
+          </motion.div>
+        ) : (
+          <motion.div
+            key="service"
+            id="view-panel-service"
+            role="tabpanel"
+            aria-label="Service call script view"
+            className="tabPanel"
+            custom={slideDirection}
+            initial={
+              reduceMotion
+                ? { opacity: 0 }
+                : { opacity: 0, x: slideDirection > 0 ? 54 : -54 }
+            }
+            animate={{ opacity: 1, x: 0 }}
+            exit={
+              reduceMotion
+                ? { opacity: 0 }
+                : { opacity: 0, x: slideDirection > 0 ? -54 : 54 }
+            }
+            transition={{ duration: 0.28, ease: [0.2, 0.7, 0.2, 1] }}
+          >
+            <section className="card" aria-label="Service overview and call flow">
+              <div className="section-head">
+                <h2>Service Offer + Call Script</h2>
+                <span className="muted">Quick reference during live calls</span>
+              </div>
+
+              <div className="scriptGrid">
+                <article className="scriptBlock">
+                  <h3>What We Do (Simple Offer)</h3>
+                  <ul>
+                    <li>Website + Google profile audit focused on booking/call leaks.</li>
+                    <li>Clarity fixes: services, proof, offer, contact flow, trust signals.</li>
+                    <li>Fast implementation option after audit if they want help shipping.</li>
+                  </ul>
+                </article>
+
+                <article className="scriptBlock">
+                  <h3>Call Flow (5–8 min)</h3>
+                  <ol>
+                    <li>Intro + context: “I noticed a few conversion opportunities.”</li>
+                    <li>Ask 2 discovery questions: current lead flow + biggest bottleneck.</li>
+                    <li>Share 3 specific observations from their online presence.</li>
+                    <li>Present outcome: more calls/bookings with practical fixes.</li>
+                    <li>Close: offer audit delivery + next-step booking.</li>
+                  </ol>
+                </article>
+
+                <article className="scriptBlock">
+                  <h3>Prompt Script (Use/Adapt)</h3>
+                  <p>
+                    “Hey <strong>[Business Name]</strong>, I took a quick look at your website and Google profile.
+                    I found a few small fixes that could help convert more search traffic into calls/bookings.
+                    If you want, I can walk you through the top 3 now and send you the audit after this call.”
+                  </p>
+                </article>
+
+                <article className="scriptBlock">
+                  <h3>Objection Handles</h3>
+                  <ul>
+                    <li><strong>“No budget”</strong> → Start with low-lift fixes they can do themselves first.</li>
+                    <li><strong>“Need to think”</strong> → Offer a concise written audit + 10-min follow-up slot.</li>
+                    <li><strong>“We already have a site”</strong> → Focus on conversion gaps, not redesign.</li>
+                  </ul>
+                </article>
+              </div>
+            </section>
           </motion.div>
         )}
       </AnimatePresence>
