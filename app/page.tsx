@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { motion } from "motion/react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 
 type Prospect = { name: string; niche: string; status: string; lastContactedAt?: string };
 type DailyActions = {
@@ -16,12 +16,17 @@ type State = {
   calls: number;
   closed: number;
   streak: number;
+  bestStreak: number;
   lastCheck: string;
   prospects: Prospect[];
   dailyActions: Record<string, DailyActions>;
 };
 
 const STORAGE_KEY = "arias_outreach_game_v1";
+const STORAGE_CORRUPT_PREFIX = `${STORAGE_KEY}_corrupt`;
+const XP_PER_LEVEL = 100;
+const DAY_MS = 86_400_000;
+const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 const SEEDED: Prospect[] = [
   ["Barren Ground Coffee", "Cafe"],
@@ -53,48 +58,106 @@ const QUICK_ACTIONS = [
   { key: "closed", label: "Closed", status: "Closed", xp: 100 },
 ] as const;
 
+const RANKS = [
+  { name: "Rookie", min: 0, color: "#8d95b3" },
+  { name: "Bronze", min: 200, color: "#d28a5d" },
+  { name: "Silver", min: 600, color: "#c9d2e8" },
+  { name: "Gold", min: 1200, color: "#f3c969" },
+  { name: "Platinum", min: 2200, color: "#9ad8ff" },
+  { name: "Diamond", min: 3500, color: "#bda4ff" },
+] as const;
+
 const defaultState = (): State => ({
   xp: 0,
   sent: 0,
   calls: 0,
   closed: 0,
   streak: 0,
+  bestStreak: 0,
   lastCheck: "",
   prospects: SEEDED,
   dailyActions: {},
 });
 
-const levelFromXP = (xp: number) => Math.floor(xp / 100) + 1;
-const todayKey = () => new Date().toISOString().slice(0, 10);
+const pad2 = (value: number) => String(value).padStart(2, "0");
+const localDateKey = (date = new Date()) =>
+  `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+const parseDateKey = (value: string) => {
+  if (!DATE_KEY_RE.test(value)) return null;
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(year, month - 1, day, 12);
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+  return date;
+};
+const levelFromXP = (xp: number) => Math.floor(xp / XP_PER_LEVEL) + 1;
+const xpIntoLevel = (xp: number) => xp % XP_PER_LEVEL;
+const todayKey = () => localDateKey();
+const dateKeyFromOffset = (offset: number, baseKey = todayKey()) => {
+  const base = parseDateKey(baseKey) ?? new Date();
+  base.setDate(base.getDate() + offset);
+  return localDateKey(base);
+};
+const dayDiff = (a: string, b: string) => {
+  const da = parseDateKey(a)?.getTime();
+  const db = parseDateKey(b)?.getTime();
+  if (da === undefined || db === undefined) return null;
+  return Math.round((db - da) / DAY_MS);
+};
 const emptyDailyActions = (): DailyActions => ({ sent: 0, calls: 0, closed: 0, checkIn: false });
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
-const toNumber = (value: unknown, fallback = 0) =>
-  typeof value === "number" && Number.isFinite(value) ? value : fallback;
+const toNumber = (value: unknown, fallback = 0) => {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+};
+const toCount = (value: unknown, fallback = 0) => Math.max(0, Math.floor(toNumber(value, fallback)));
+const normalizeStatus = (value: unknown) =>
+  typeof value === "string" && STATUS_OPTIONS.includes(value) ? value : STATUS_OPTIONS[0];
+const normalizeDateTime = (value: unknown) => {
+  if (typeof value !== "string" || !value) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+};
+const normalizeDateKey = (value: unknown) =>
+  typeof value === "string" && parseDateKey(value) ? value : "";
 const normalizeProspect = (value: unknown): Prospect | null => {
   if (!isRecord(value) || typeof value.name !== "string") return null;
+  const name = value.name.trim();
+  if (!name) return null;
   return {
-    name: value.name,
-    niche: typeof value.niche === "string" ? value.niche : "",
-    status: typeof value.status === "string" ? value.status : "Not Contacted",
-    lastContactedAt: typeof value.lastContactedAt === "string" ? value.lastContactedAt : "",
+    name,
+    niche: typeof value.niche === "string" ? value.niche.trim() : "",
+    status: normalizeStatus(value.status),
+    lastContactedAt: normalizeDateTime(value.lastContactedAt),
   };
 };
 const normalizeDailyActions = (value: unknown): Record<string, DailyActions> => {
   if (!isRecord(value)) return {};
   return Object.fromEntries(
-    Object.entries(value).map(([date, actions]) => {
-      if (!isRecord(actions)) return [date, emptyDailyActions()];
-      return [
-        date,
-        {
-          sent: toNumber(actions.sent),
-          calls: toNumber(actions.calls),
-          closed: toNumber(actions.closed),
-          checkIn: Boolean(actions.checkIn),
-        },
-      ];
-    }),
+    Object.entries(value)
+      .filter(([date]) => Boolean(parseDateKey(date)))
+      .map(([date, actions]) => {
+        if (!isRecord(actions)) return [date, emptyDailyActions()];
+        return [
+          date,
+          {
+            sent: toCount(actions.sent),
+            calls: toCount(actions.calls),
+            closed: toCount(actions.closed),
+            checkIn: Boolean(actions.checkIn),
+          },
+        ];
+      }),
   );
 };
 const normalizeState = (value: unknown): State => {
@@ -102,16 +165,18 @@ const normalizeState = (value: unknown): State => {
   if (!isRecord(value)) return fallback;
   const prospects = Array.isArray(value.prospects)
     ? value.prospects.map(normalizeProspect).filter((p): p is Prospect => Boolean(p))
-    : fallback.prospects;
+    : null;
+  const streak = toCount(value.streak, fallback.streak);
 
   return {
-    xp: toNumber(value.xp, fallback.xp),
-    sent: toNumber(value.sent, fallback.sent),
-    calls: toNumber(value.calls, fallback.calls),
-    closed: toNumber(value.closed, fallback.closed),
-    streak: toNumber(value.streak, fallback.streak),
-    lastCheck: typeof value.lastCheck === "string" ? value.lastCheck : fallback.lastCheck,
-    prospects: prospects.length ? prospects : fallback.prospects,
+    xp: toCount(value.xp, fallback.xp),
+    sent: toCount(value.sent, fallback.sent),
+    calls: toCount(value.calls, fallback.calls),
+    closed: toCount(value.closed, fallback.closed),
+    streak,
+    bestStreak: Math.max(streak, toCount(value.bestStreak, 0)),
+    lastCheck: normalizeDateKey(value.lastCheck),
+    prospects: prospects ?? fallback.prospects,
     dailyActions: normalizeDailyActions(value.dailyActions),
   };
 };
@@ -125,7 +190,13 @@ const daysSince = (value?: string) => {
   if (!value) return null;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
-  return Math.floor((Date.now() - date.getTime()) / 86_400_000);
+  return Math.floor((Date.now() - date.getTime()) / DAY_MS);
+};
+type Rank = (typeof RANKS)[number];
+const rankFor = (xp: number): { current: Rank; next: Rank | undefined } => {
+  const current = RANKS.reduce<Rank>((matched, tier) => (xp >= tier.min ? tier : matched), RANKS[0]);
+  const next = RANKS.find((tier) => tier.min > xp);
+  return { current, next };
 };
 const templateFor = (prospect: Prospect) => {
   const niche = prospect.niche.toLowerCase();
@@ -140,28 +211,75 @@ const templateFor = (prospect: Prospect) => {
   }
   return `Hi ${prospect.name}, I help local businesses find simple online fixes that can create more calls, bookings, or visits. Want me to send a quick 3-point audit for ${prospect.name}?`;
 };
+const heatScore = (actions?: DailyActions) => {
+  if (!actions) return 0;
+  return actions.sent + actions.calls * 3 + actions.closed * 6 + (actions.checkIn ? 1 : 0);
+};
+const loadStoredState = (): State => {
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return defaultState();
+    return normalizeState(JSON.parse(raw));
+  } catch {
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        window.localStorage.setItem(`${STORAGE_CORRUPT_PREFIX}_${Date.now()}`, raw);
+        window.localStorage.removeItem(STORAGE_KEY);
+      }
+    } catch {}
+    return defaultState();
+  }
+};
+const saveStoredState = (state: State) => {
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(normalizeState(state)));
+  } catch {
+    // Keep the in-memory session usable when storage is unavailable or full.
+  }
+};
 
 export default function Page() {
   const [state, setState] = useState<State>(defaultState);
   const [hydrated, setHydrated] = useState(false);
+  const [currentDay, setCurrentDay] = useState(todayKey);
   const [bizName, setBizName] = useState("");
   const [bizNiche, setBizNiche] = useState("");
   const [bizStatus, setBizStatus] = useState(STATUS_OPTIONS[0]);
   const [search, setSearch] = useState("");
   const [nicheFilter, setNicheFilter] = useState("All");
   const [copiedKey, setCopiedKey] = useState("");
+  const reduceMotion = useReducedMotion();
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) setState(normalizeState(JSON.parse(raw)));
-    } catch {}
+    setState(loadStoredState());
+    setCurrentDay(todayKey());
     setHydrated(true);
   }, []);
 
   useEffect(() => {
-    if (hydrated) localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    if (hydrated) saveStoredState(state);
   }, [state, hydrated]);
+
+  useEffect(() => {
+    if (!hydrated) return undefined;
+    const interval = window.setInterval(() => {
+      setCurrentDay((day) => {
+        const next = todayKey();
+        return next === day ? day : next;
+      });
+    }, 60_000);
+    return () => window.clearInterval(interval);
+  }, [hydrated]);
+
+  // Auto-reset a stale streak (gap of 2+ days since last check-in) on mount.
+  useEffect(() => {
+    if (!hydrated || !state.lastCheck) return;
+    const gap = dayDiff(state.lastCheck, currentDay);
+    if (gap !== null && gap >= 2 && state.streak !== 0) {
+      setState((s) => ({ ...s, streak: 0 }));
+    }
+  }, [hydrated, currentDay, state.lastCheck, state.streak]);
 
   const pct = useMemo(() => {
     const outreach = Math.min(state.sent / 20, 1) * 60;
@@ -170,8 +288,14 @@ export default function Page() {
     return Math.round(outreach + calls + close);
   }, [state.sent, state.calls, state.closed]);
 
-  const today = todayKey();
+  const today = currentDay;
   const todayActions = state.dailyActions[today] ?? emptyDailyActions();
+  const { current: rank, next: nextRank } = rankFor(state.xp);
+  const rankProgress = nextRank
+    ? Math.round(((state.xp - rank.min) / (nextRank.min - rank.min)) * 100)
+    : 100;
+  const xpToNext = nextRank ? nextRank.min - state.xp : 0;
+  const levelXP = xpIntoLevel(state.xp);
   const nicheOptions = useMemo(
     () =>
       ["All", ...Array.from(new Set(state.prospects.map((p) => p.niche).filter(Boolean))).sort()],
@@ -206,14 +330,46 @@ export default function Page() {
     { title: "First Outreach", unlocked: state.sent > 0 },
     { title: "First Call", unlocked: state.calls > 0 },
     { title: "First Close", unlocked: state.closed > 0 },
-    { title: "7-day Streak", unlocked: state.streak >= 7 },
+    { title: "7-day Streak", unlocked: state.bestStreak >= 7 },
   ];
 
-  const bumpDailyAction = (actions: Record<string, DailyActions>, key: keyof DailyActions) => {
-    const current = actions[today] ?? emptyDailyActions();
+  const heatmap = useMemo(() => {
+    const days = Array.from({ length: 7 }, (_, idx) => {
+      const offset = -6 + idx;
+      const key = dateKeyFromOffset(offset, today);
+      const actions = state.dailyActions[key];
+      return {
+        key,
+        offset,
+        score: heatScore(actions),
+        label: new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(parseDateKey(key) ?? new Date()),
+      };
+    });
+    const max = Math.max(1, ...days.map((d) => d.score));
+    return days.map((d) => ({ ...d, intensity: d.score / max }));
+  }, [state.dailyActions, today]);
+
+  const streakDays = useMemo(
+    () =>
+      Array.from({ length: 7 }, (_, idx) => {
+        const offset = -6 + idx;
+        const key = dateKeyFromOffset(offset, today);
+        const checkedIn = state.dailyActions[key]?.checkIn ?? false;
+        const label = new Intl.DateTimeFormat(undefined, { weekday: "short" }).format(
+          parseDateKey(key) ?? new Date(),
+        );
+        return { key, offset, checkedIn, label };
+      }),
+    [state.dailyActions, today],
+  );
+
+  const currentRankIndex = RANKS.findIndex((tier) => tier.name === rank.name);
+
+  const bumpDailyAction = (actions: Record<string, DailyActions>, key: keyof DailyActions, dateKey = todayKey()) => {
+    const current = actions[dateKey] ?? emptyDailyActions();
     return {
       ...actions,
-      [today]: {
+      [dateKey]: {
         ...current,
         [key]: key === "checkIn" ? true : toNumber(current[key]) + 1,
       },
@@ -224,13 +380,15 @@ export default function Page() {
     const action = QUICK_ACTIONS.find((item) => item.key === type);
     if (!action) return;
     const stampedAt = new Date().toISOString();
+    const actionDay = todayKey();
+    setCurrentDay(actionDay);
     setState((s) => ({
       ...s,
       xp: s.xp + action.xp,
       sent: action.key === "sent" ? s.sent + 1 : s.sent,
       calls: action.key === "calls" ? s.calls + 1 : s.calls,
       closed: action.key === "closed" ? s.closed + 1 : s.closed,
-      dailyActions: bumpDailyAction(s.dailyActions, action.key),
+      dailyActions: bumpDailyAction(s.dailyActions, action.key, actionDay),
       prospects: s.prospects.map((prospect, idx) =>
         idx === index ? { ...prospect, status: action.status, lastContactedAt: stampedAt } : prospect,
       ),
@@ -247,17 +405,23 @@ export default function Page() {
   };
 
   const dailyCheckIn = () => {
-    if (state.lastCheck === today) {
-      alert("Already checked in today.");
-      return;
-    }
-    setState((s) => ({
-      ...s,
-      lastCheck: today,
-      streak: s.streak + 1,
-      xp: s.xp + 5,
-      dailyActions: bumpDailyAction(s.dailyActions, "checkIn"),
-    }));
+    const checkInDay = todayKey();
+    setCurrentDay(checkInDay);
+    if (state.lastCheck === checkInDay) return;
+    setState((s) => {
+      if (s.lastCheck === checkInDay) return s;
+      const gap = s.lastCheck ? dayDiff(s.lastCheck, checkInDay) : null;
+      const continued = gap === 1;
+      const nextStreak = continued ? s.streak + 1 : 1;
+      return {
+        ...s,
+        lastCheck: checkInDay,
+        streak: nextStreak,
+        bestStreak: Math.max(s.bestStreak, nextStreak),
+        xp: s.xp + 5,
+        dailyActions: bumpDailyAction(s.dailyActions, "checkIn", checkInDay),
+      };
+    });
   };
 
   const addProspect = () => {
@@ -275,9 +439,51 @@ export default function Page() {
     setState((s) => ({ ...s, prospects: s.prospects.filter((_, idx) => idx !== i) }));
   };
 
-  const cards = [
-    { title: "Level", value: levelFromXP(state.xp), sub: `${state.xp} XP` },
-    { title: "Streak", value: `${state.streak}d`, sub: "Daily check-in keeps momentum" },
+  const xpBar = (
+    <div
+      className="xpBar"
+      role="progressbar"
+      aria-valuenow={levelXP}
+      aria-valuemin={0}
+      aria-valuemax={XP_PER_LEVEL}
+      aria-label={`${levelXP} of ${XP_PER_LEVEL} XP into level ${levelFromXP(state.xp)}`}
+    >
+      <motion.div
+        className="xpBarFill"
+        initial={false}
+        animate={{ scaleX: levelXP / XP_PER_LEVEL }}
+        transition={{ duration: 0.6, ease: [0.2, 0.7, 0.2, 1] }}
+      />
+    </div>
+  );
+  const streakStrip = (
+    <div className="streakStrip" role="list" aria-label="Last 7 days check-in track">
+      {streakDays.map((d) => (
+        <motion.span
+          key={d.key}
+          role="listitem"
+          className={`streakDot${d.checkedIn ? " lit" : ""}${d.offset === 0 ? " today" : ""}`}
+          aria-label={`${d.label}: ${d.checkedIn ? "checked in" : "missed"}`}
+          initial={false}
+          animate={d.checkedIn && !reduceMotion ? { scale: [1, 1.18, 1] } : { scale: 1 }}
+          transition={{ duration: 0.5, ease: "easeOut" }}
+        />
+      ))}
+    </div>
+  );
+  const cards: { title: string; value: ReactNode; sub: string; extra?: ReactNode }[] = [
+    {
+      title: "Level",
+      value: levelFromXP(state.xp),
+      sub: `${levelXP} / ${XP_PER_LEVEL} XP to next`,
+      extra: xpBar,
+    },
+    {
+      title: "Streak",
+      value: `${state.streak}d`,
+      sub: state.bestStreak ? `Best ${state.bestStreak}d` : "Check in to build it",
+      extra: streakStrip,
+    },
     { title: "Outreach Sent", value: state.sent, sub: `${state.sent} / 20 target` },
     { title: "Calls Booked", value: state.calls, sub: `${state.calls} / 3 target` },
   ];
@@ -305,14 +511,30 @@ export default function Page() {
     }
   };
 
+  const fade = reduceMotion
+    ? { initial: false, animate: { opacity: 1 } }
+    : {
+        initial: { opacity: 0, y: 12 },
+        animate: { opacity: 1, y: 0 },
+      };
+
   return (
     <div className="wrap">
       <header className="hero">
         <div className="hero-row">
           <h1>Arias Outreach Game Dashboard</h1>
-          <span className="level-pill" aria-label={`Level ${levelFromXP(state.xp)}, ${state.xp} XP`}>
-            Level {levelFromXP(state.xp)} · {state.xp} XP
-          </span>
+          <motion.span
+            className="rank-pill"
+            style={{ color: rank.color, borderColor: `${rank.color}55`, background: `${rank.color}14` }}
+            aria-label={`Rank ${rank.name}, level ${levelFromXP(state.xp)}, ${state.xp} XP`}
+            initial={false}
+            animate={reduceMotion ? undefined : { scale: [1, 1.06, 1] }}
+            transition={{ duration: 0.45, ease: "easeOut" }}
+            key={rank.name}
+          >
+            <span className="rank-dot" style={{ background: rank.color, boxShadow: `0 0 8px ${rank.color}` }} />
+            {rank.name} · L{levelFromXP(state.xp)} · {state.xp} XP
+          </motion.span>
         </div>
         <p>Goal: contact 20 businesses, book 3 calls, close 1 paid audit.</p>
       </header>
@@ -322,13 +544,22 @@ export default function Page() {
           <motion.div
             key={c.title}
             className="card stat"
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
+            {...fade}
             transition={{ duration: 0.3, delay: i * 0.05, ease: "easeOut" }}
+            whileHover={reduceMotion ? undefined : { y: -2 }}
           >
             <h2>{c.title}</h2>
-            <div className="big">{c.value}</div>
+            <motion.div
+              className="big"
+              key={String(c.value)}
+              initial={reduceMotion ? false : { opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.25, ease: "easeOut" }}
+            >
+              {c.value}
+            </motion.div>
             <p>{c.sub}</p>
+            {c.extra}
           </motion.div>
         ))}
       </section>
@@ -336,8 +567,7 @@ export default function Page() {
       <motion.section
         className="card mission"
         aria-label="Mission progress"
-        initial={{ opacity: 0, y: 12 }}
-        animate={{ opacity: 1, y: 0 }}
+        {...fade}
         transition={{ duration: 0.35, delay: 0.25, ease: "easeOut" }}
       >
         <div className="mission-head">
@@ -345,25 +575,104 @@ export default function Page() {
           <span className="mission-pct" aria-live="polite">{pct}%</span>
         </div>
         <div className="bar" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
-          <div className="fill" style={{ width: `${pct}%` }} />
+          <motion.div
+            className="fill"
+            initial={false}
+            animate={{ scaleX: pct / 100 }}
+            transition={{ duration: 0.6, ease: [0.2, 0.7, 0.2, 1] }}
+          />
         </div>
+
+        <div className="rankProgress">
+          <div className="rankMeta">
+            <span className="muted">
+              {nextRank ? `${xpToNext} XP to ${nextRank.name}` : "Top tier reached"}
+            </span>
+            <span className="muted">{rankProgress}%</span>
+          </div>
+          <div className="bar compact" role="progressbar" aria-valuenow={rankProgress} aria-valuemin={0} aria-valuemax={100}>
+            <motion.div
+              className="fill rankFill"
+              initial={false}
+              animate={{ scaleX: rankProgress / 100 }}
+              transition={{ duration: 0.6, ease: [0.2, 0.7, 0.2, 1] }}
+              style={{ background: `linear-gradient(90deg, ${rank.color}, ${nextRank?.color ?? rank.color})` }}
+            />
+          </div>
+        </div>
+
         <div className="row">
-          <button
+          <motion.button
             type="button"
             className="secondary"
             onClick={dailyCheckIn}
             disabled={checkedInToday}
             aria-label={checkedInToday ? "Already checked in today" : "Daily check-in for 5 XP"}
+            whileTap={reduceMotion || checkedInToday ? undefined : { scale: 0.97 }}
           >
             {checkedInToday ? "Checked in today" : "Daily Check-in (+5 XP)"}
-          </button>
+          </motion.button>
         </div>
+      </motion.section>
+
+      <motion.section
+        className="card rankLadder"
+        aria-label="Rank ladder"
+        {...fade}
+        transition={{ duration: 0.35, delay: 0.28, ease: "easeOut" }}
+      >
+        <div className="rankLadder-head">
+          <h2>Rank Ladder</h2>
+          <span className="muted">
+            Position {currentRankIndex + 1} of {RANKS.length}
+          </span>
+        </div>
+        <ol className="rankList">
+          {RANKS.map((tier, idx) => {
+            const isCurrent = tier.name === rank.name;
+            const isReached = state.xp >= tier.min;
+            const xpFromTier = Math.max(0, state.xp - tier.min);
+            return (
+              <motion.li
+                key={tier.name}
+                className={`rankItem${isCurrent ? " current" : ""}${isReached ? " reached" : ""}`}
+                style={{ ["--tier-color" as string]: tier.color }}
+                whileHover={reduceMotion ? undefined : { y: -1 }}
+                transition={{ duration: 0.2, ease: "easeOut" }}
+              >
+                <span className="rankIndex">{idx + 1}</span>
+                <span className="rankSwatch" aria-hidden="true" />
+                <span className="rankName">{tier.name}</span>
+                <span className="rankReq">{tier.min.toLocaleString()} XP</span>
+                {isCurrent ? (
+                  <motion.span
+                    className="rankBadge"
+                    initial={false}
+                    animate={
+                      reduceMotion ? { opacity: 1 } : { opacity: [0.65, 1, 0.65] }
+                    }
+                    transition={{ duration: 2.2, repeat: Infinity, ease: "easeInOut" }}
+                  >
+                    You · +{xpFromTier} XP
+                  </motion.span>
+                ) : isReached ? (
+                  <span className="rankBadge reached" aria-label="Cleared">
+                    Cleared
+                  </span>
+                ) : (
+                  <span className="rankBadge locked" aria-label="Locked">
+                    Locked
+                  </span>
+                )}
+              </motion.li>
+            );
+          })}
+        </ol>
       </motion.section>
 
       <motion.div
         className="panelGrid"
-        initial={{ opacity: 0, y: 12 }}
-        animate={{ opacity: 1, y: 0 }}
+        {...fade}
         transition={{ duration: 0.35, delay: 0.3, ease: "easeOut" }}
       >
         <section className="card" aria-label="Daily quests">
@@ -376,33 +685,64 @@ export default function Page() {
             aria-valuemax={100}
             aria-label={`${questProgress}% of daily quests complete`}
           >
-            <div className="fill" style={{ width: `${questProgress}%` }} />
+            <motion.div
+              className="fill"
+              initial={false}
+              animate={{ scaleX: questProgress / 100 }}
+              transition={{ duration: 0.5, ease: [0.2, 0.7, 0.2, 1] }}
+            />
           </div>
           <p>{questProgress}% complete today</p>
           <div className="questList">
             {quests.map((quest) => {
               const done = quest.current >= quest.target;
               return (
-                <div className={`quest${done ? " done" : ""}`} key={quest.title}>
+                <motion.div
+                  className={`quest${done ? " done" : ""}`}
+                  key={quest.title}
+                  layout
+                  transition={{ duration: 0.25, ease: "easeOut" }}
+                >
                   <span>{quest.title}</span>
                   <strong>{Math.min(quest.current, quest.target)}/{quest.target}</strong>
-                </div>
+                </motion.div>
               );
             })}
           </div>
         </section>
 
-        <section className="card" aria-label="Achievements">
-          <h2>Achievements</h2>
+        <section className="card" aria-label="Activity and achievements">
+          <h2>7-Day Activity</h2>
+          <div className="heatmap" role="list">
+            {heatmap.map((d) => (
+              <motion.div
+                key={d.key}
+                className={`heatCell${d.offset === 0 ? " today" : ""}`}
+                role="listitem"
+                aria-label={`${d.label}: ${d.score} activity points`}
+                initial={reduceMotion ? false : { opacity: 0, scale: 0.85 }}
+                animate={{ opacity: 0.35 + d.intensity * 0.65, scale: 1 }}
+                transition={{ duration: 0.3, ease: "easeOut" }}
+                whileHover={reduceMotion ? undefined : { scale: 1.08 }}
+              >
+                <span className="heatLabel">{d.label[0]}</span>
+              </motion.div>
+            ))}
+          </div>
+          <h2 style={{ marginTop: 18 }}>Achievements</h2>
           <div className="badgeGrid">
             {achievements.map((achievement) => (
-              <span
+              <motion.span
                 className={`achievement ${achievement.unlocked ? "unlocked" : ""}`}
                 key={achievement.title}
                 aria-label={`${achievement.title}: ${achievement.unlocked ? "unlocked" : "locked"}`}
+                layout
+                initial={false}
+                animate={achievement.unlocked && !reduceMotion ? { scale: [1, 1.08, 1] } : { scale: 1 }}
+                transition={{ duration: 0.4, ease: "easeOut" }}
               >
                 {achievement.title}
-              </span>
+              </motion.span>
             ))}
           </div>
         </section>
@@ -472,83 +812,129 @@ export default function Page() {
               </tr>
             </thead>
             <tbody>
-              {visibleProspects.map(({ prospect: p, index: i }) => {
-                const age = daysSince(p.lastContactedAt);
-                const actionable = p.status !== "Closed" && p.status !== "Not Contacted";
-                const overdue = actionable && age !== null && age > 3;
-                const copied = copiedKey === `${p.name}-${i}`;
-                const copyFailed = copiedKey === `failed-${i}`;
-                return (
-                  <tr key={`${p.name}-${i}`}>
-                    <td>{p.name}</td>
-                    <td>
-                      <span className="tag">{p.niche || "None"}</span>
-                    </td>
-                    <td>
-                      <select
-                        value={p.status}
-                        onChange={(e) => updateProspectStatus(i, e.target.value)}
-                        aria-label={`Status for ${p.name}`}
-                      >
-                        {STATUS_OPTIONS.map((status) => (
-                          <option key={status}>{status}</option>
-                        ))}
-                      </select>
-                    </td>
-                    <td>
-                      <div className="followUp">
-                        <span>{formatDate(p.lastContactedAt)}</span>
-                        <span className={`badge ${overdue ? "overdue" : actionable ? "active" : ""}`}>
-                          {overdue ? "Overdue" : actionable ? "On track" : "None"}
-                        </span>
-                      </div>
-                    </td>
-                    <td>
-                      <div className="miniActions">
-                        {QUICK_ACTIONS.map((action) => (
-                          <button
-                            type="button"
-                            key={action.key}
-                            className="tiny"
-                            onClick={() => logProspectAction(i, action.key)}
-                            aria-label={`Log ${action.label} for ${p.name}`}
+              <AnimatePresence initial={false}>
+                {visibleProspects.map(({ prospect: p, index: i }) => {
+                  const age = daysSince(p.lastContactedAt);
+                  const actionable = p.status !== "Closed" && p.status !== "Not Contacted";
+                  const overdue = actionable && age !== null && age > 3;
+                  const copied = copiedKey === `${p.name}-${i}`;
+                  const copyFailed = copiedKey === `failed-${i}`;
+                  const statusClass = p.status.toLowerCase().replace(/\s+/g, "-");
+                  return (
+                    <motion.tr
+                      key={`${p.name}-${i}`}
+                      layout
+                      initial={reduceMotion ? false : { opacity: 0, y: 6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={reduceMotion ? undefined : { opacity: 0, x: -16 }}
+                      transition={{ duration: 0.22, ease: "easeOut" }}
+                      className={`row-${statusClass}`}
+                    >
+                      <td>{p.name}</td>
+                      <td>
+                        <span className="tag">{p.niche || "None"}</span>
+                      </td>
+                      <td>
+                        <motion.div
+                          className="statusCell"
+                          key={p.status}
+                          initial={reduceMotion ? false : { opacity: 0, y: 4 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ duration: 0.2, ease: "easeOut" }}
+                        >
+                          <motion.span
+                            className={`statusDot status-${statusClass}`}
+                            aria-hidden="true"
+                            initial={false}
+                            animate={reduceMotion ? { scale: 1 } : { scale: [1, 1.4, 1] }}
+                            transition={{ duration: 0.45, ease: "easeOut" }}
+                            key={`dot-${p.status}`}
+                          />
+                          <select
+                            value={p.status}
+                            onChange={(e) => updateProspectStatus(i, e.target.value)}
+                            aria-label={`Status for ${p.name}`}
                           >
-                            {action.label}
-                          </button>
-                        ))}
-                      </div>
-                    </td>
-                    <td>
-                      <button
-                        type="button"
-                        className="secondary"
-                        onClick={() => copyTemplate(p, i)}
-                        aria-label={`Copy outreach template for ${p.name}`}
-                      >
-                        Copy
-                      </button>
-                      {copied && (
-                        <span className="copyStatus" role="status" aria-live="polite">Copied</span>
-                      )}
-                      {copyFailed && (
-                        <span className="copyStatus failed" role="status" aria-live="polite">
-                          Copy failed
-                        </span>
-                      )}
-                    </td>
-                    <td>
-                      <button
-                        type="button"
-                        className="secondary"
-                        onClick={() => removeProspect(i)}
-                        aria-label={`Remove ${p.name}`}
-                      >
-                        Remove
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
+                            {STATUS_OPTIONS.map((status) => (
+                              <option key={status}>{status}</option>
+                            ))}
+                          </select>
+                        </motion.div>
+                      </td>
+                      <td>
+                        <div className="followUp">
+                          <span>{formatDate(p.lastContactedAt)}</span>
+                          <span className={`badge ${overdue ? "overdue" : actionable ? "active" : ""}`}>
+                            {overdue ? "Overdue" : actionable ? "On track" : "None"}
+                          </span>
+                        </div>
+                      </td>
+                      <td>
+                        <div className="miniActions">
+                          {QUICK_ACTIONS.map((action) => (
+                            <motion.button
+                              type="button"
+                              key={action.key}
+                              className="tiny"
+                              onClick={() => logProspectAction(i, action.key)}
+                              aria-label={`Log ${action.label} for ${p.name}`}
+                              whileTap={reduceMotion ? undefined : { scale: 0.94 }}
+                            >
+                              {action.label}
+                            </motion.button>
+                          ))}
+                        </div>
+                      </td>
+                      <td>
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={() => copyTemplate(p, i)}
+                          aria-label={`Copy outreach template for ${p.name}`}
+                        >
+                          Copy
+                        </button>
+                        <AnimatePresence>
+                          {copied && (
+                            <motion.span
+                              className="copyStatus"
+                              role="status"
+                              aria-live="polite"
+                              initial={{ opacity: 0, y: -4 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0 }}
+                            >
+                              Copied
+                            </motion.span>
+                          )}
+                          {copyFailed && (
+                            <motion.span
+                              className="copyStatus failed"
+                              role="status"
+                              aria-live="polite"
+                              initial={{ opacity: 0, y: -4 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0 }}
+                            >
+                              Copy failed
+                            </motion.span>
+                          )}
+                        </AnimatePresence>
+                      </td>
+                      <td>
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={() => removeProspect(i)}
+                          aria-label={`Remove ${p.name}`}
+                        >
+                          Remove
+                        </button>
+                      </td>
+                    </motion.tr>
+                  );
+                })}
+              </AnimatePresence>
             </tbody>
           </table>
         </div>
