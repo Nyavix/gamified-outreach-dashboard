@@ -206,7 +206,36 @@ p { color: var(--text-muted); margin: 4px 0; font-size: var(--fs-base); line-hei
 }
 
 /* Mission progress */
-.mission { margin-top: 14px; }
+.viewTabs {
+  display: inline-flex;
+  gap: 6px;
+  margin-top: 14px;
+  padding: 4px;
+  background: rgba(11, 16, 36, 0.55);
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+}
+.tabBtn {
+  min-height: 34px;
+  padding: 6px 12px;
+  border-radius: var(--r-pill);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  box-shadow: none;
+}
+.tabBtn:hover { transform: none; }
+.tabBtn.active {
+  background: rgba(91, 155, 255, 0.2);
+  border-color: rgba(91, 155, 255, 0.42);
+  color: #eaf1ff;
+}
+.tabPanel {
+  margin-top: 14px;
+  will-change: transform, opacity;
+}
+
+.mission { margin-top: 0; }
 .mission-head {
   display: flex;
   align-items: baseline;
@@ -297,13 +326,19 @@ select {
   -webkit-appearance: none;
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><path d='M3 4.5l3 3 3-3' stroke='%238d95b3' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>");
   background-repeat: no-repeat;
-  background-position: right 10px center;
-  padding-right: 32px;
+  background-size: 10px 10px;
+  background-position: right 11px center;
+  padding-right: 28px;
 }
 
 td select {
   width: 100%;
   min-width: 132px;
+  min-height: 34px;
+  font-size: 13px;
+  padding: 6px 24px 6px 10px;
+  background-size: 8px 8px;
+  background-position: right 8px center;
 }
 
 /* Buttons */
@@ -764,6 +799,8 @@ tbody tr.row-closed td:first-child {
 @media (max-width: 760px) {
   .wrap { padding: 20px 14px 48px; }
   .panelGrid { grid-template-columns: 1fr; }
+  .viewTabs { display: flex; width: 100%; }
+  .tabBtn { flex: 1; }
   .grid { gap: 10px; grid-template-columns: repeat(2, 1fr); }
   .card.stat { padding: 14px; }
   .big { font-size: var(--fs-xl); }

@@ -249,6 +249,8 @@ export default function Page() {
   const [search, setSearch] = useState("");
   const [nicheFilter, setNicheFilter] = useState("All");
   const [copiedKey, setCopiedKey] = useState("");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "prospects">("dashboard");
+  const [slideDirection, setSlideDirection] = useState(1);
   const reduceMotion = useReducedMotion();
 
   useEffect(() => {
@@ -518,6 +520,14 @@ export default function Page() {
         animate: { opacity: 1, y: 0 },
       };
 
+  const switchTab = (nextTab: "dashboard" | "prospects") => {
+    if (nextTab === activeTab) return;
+    const currentIndex = activeTab === "dashboard" ? 0 : 1;
+    const nextIndex = nextTab === "dashboard" ? 0 : 1;
+    setSlideDirection(nextIndex > currentIndex ? 1 : -1);
+    setActiveTab(nextTab);
+  };
+
   return (
     <div className="wrap">
       <header className="hero">
@@ -564,6 +574,51 @@ export default function Page() {
         ))}
       </section>
 
+      <div className="viewTabs" role="tablist" aria-label="Dashboard views">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "dashboard"}
+          aria-controls="view-panel-dashboard"
+          className={`tabBtn${activeTab === "dashboard" ? " active" : ""}`}
+          onClick={() => switchTab("dashboard")}
+        >
+          Dashboard
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "prospects"}
+          aria-controls="view-panel-prospects"
+          className={`tabBtn${activeTab === "prospects" ? " active" : ""}`}
+          onClick={() => switchTab("prospects")}
+        >
+          Prospect Tracker
+        </button>
+      </div>
+
+      <AnimatePresence initial={false} mode="wait" custom={slideDirection}>
+        {activeTab === "dashboard" ? (
+          <motion.div
+            key="dashboard"
+            id="view-panel-dashboard"
+            role="tabpanel"
+            aria-label="Dashboard view"
+            className="tabPanel"
+            custom={slideDirection}
+            initial={
+              reduceMotion
+                ? { opacity: 0 }
+                : { opacity: 0, x: slideDirection > 0 ? -54 : 54 }
+            }
+            animate={{ opacity: 1, x: 0 }}
+            exit={
+              reduceMotion
+                ? { opacity: 0 }
+                : { opacity: 0, x: slideDirection > 0 ? 54 : -54 }
+            }
+            transition={{ duration: 0.28, ease: [0.2, 0.7, 0.2, 1] }}
+          >
       <motion.section
         className="card mission"
         aria-label="Mission progress"
@@ -747,8 +802,29 @@ export default function Page() {
           </div>
         </section>
       </motion.div>
-
-      <section className="card prospectCard" aria-label="Prospect tracker" style={{ marginTop: 14 }}>
+          </motion.div>
+        ) : (
+          <motion.div
+            key="prospects"
+            id="view-panel-prospects"
+            role="tabpanel"
+            aria-label="Prospect tracker view"
+            className="tabPanel"
+            custom={slideDirection}
+            initial={
+              reduceMotion
+                ? { opacity: 0 }
+                : { opacity: 0, x: slideDirection > 0 ? 54 : -54 }
+            }
+            animate={{ opacity: 1, x: 0 }}
+            exit={
+              reduceMotion
+                ? { opacity: 0 }
+                : { opacity: 0, x: slideDirection > 0 ? -54 : 54 }
+            }
+            transition={{ duration: 0.28, ease: [0.2, 0.7, 0.2, 1] }}
+          >
+      <section className="card prospectCard" aria-label="Prospect tracker">
         <div className="section-head">
           <h2>Prospect Tracker</h2>
           <span className="muted">{state.prospects.length} total</span>
@@ -939,6 +1015,9 @@ export default function Page() {
           </table>
         </div>
       </section>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
