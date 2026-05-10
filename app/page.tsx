@@ -1,14 +1,48 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 
-type Prospect = { name: string; niche: string; status: string; lastContactedAt?: string };
+type Prospect = {
+  id: string;
+  name: string;
+  niche: string;
+  status: string;
+  email?: string;
+  phone?: string;
+  website?: string;
+  notes?: string;
+  lastContactedAt?: string;
+};
 type DailyActions = {
   sent: number;
   calls: number;
   closed: number;
   checkIn: boolean;
+};
+type Targets = {
+  sent: number;
+  calls: number;
+  closed: number;
+};
+type ActionType = "sent" | "calls" | "closed";
+type RecentAction = {
+  id: string;
+  prospectId: string;
+  type: ActionType;
+  xp: number;
+  prevStatus: string;
+  prevLastContactedAt: string;
+  dateKey: string;
+  at: string;
 };
 type State = {
   xp: number;
@@ -20,13 +54,25 @@ type State = {
   lastCheck: string;
   prospects: Prospect[];
   dailyActions: Record<string, DailyActions>;
+  targets: Targets;
+  recentActions: RecentAction[];
 };
+type TabKey = "dashboard" | "prospects" | "service" | "alignment";
 
 const STORAGE_KEY = "arias_outreach_game_v1";
 const STORAGE_CORRUPT_PREFIX = `${STORAGE_KEY}_corrupt`;
 const XP_PER_LEVEL = 100;
 const DAY_MS = 86_400_000;
 const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const MAX_UNDO = 10;
+const DEFAULT_TARGETS: Targets = { sent: 20, calls: 3, closed: 1 };
+
+const newId = (): string => {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+};
 
 const SEEDED: Prospect[] = [
   ["Barren Ground Coffee", "Cafe"],
@@ -49,7 +95,17 @@ const SEEDED: Prospect[] = [
   ["Super 8 Yellowknife", "Hotel"],
   ["The Explorer Hotel", "Hotel"],
   ["Discovery Inn", "Hotel"],
-].map(([name, niche]) => ({ name, niche, status: "Not Contacted", lastContactedAt: "" }));
+].map(([name, niche], i) => ({
+  id: `seed-${i}`,
+  name,
+  niche,
+  status: "Not Contacted",
+  email: "",
+  phone: "",
+  website: "",
+  notes: "",
+  lastContactedAt: "",
+}));
 
 const STATUS_OPTIONS = ["Not Contacted", "Messaged", "Replied", "Call Booked", "Closed"];
 const QUICK_ACTIONS = [
@@ -67,6 +123,8 @@ const RANKS = [
   { name: "Diamond", min: 3500, color: "#bda4ff" },
 ] as const;
 
+const TAB_ORDER: TabKey[] = ["dashboard", "prospects", "service", "alignment"];
+
 const defaultState = (): State => ({
   xp: 0,
   sent: 0,
@@ -77,6 +135,8 @@ const defaultState = (): State => ({
   lastCheck: "",
   prospects: SEEDED,
   dailyActions: {},
+  targets: { ...DEFAULT_TARGETS },
+  recentActions: [],
 });
 
 const pad2 = (value: number) => String(value).padStart(2, "0");
@@ -121,6 +181,12 @@ const toNumber = (value: unknown, fallback = 0) => {
   return fallback;
 };
 const toCount = (value: unknown, fallback = 0) => Math.max(0, Math.floor(toNumber(value, fallback)));
+const toPositive = (value: unknown, fallback: number) => {
+  const parsed = Math.floor(toNumber(value, fallback));
+  return parsed > 0 ? parsed : fallback;
+};
+const toTrimmedString = (value: unknown) =>
+  typeof value === "string" ? value.trim() : "";
 const normalizeStatus = (value: unknown) =>
   typeof value === "string" && STATUS_OPTIONS.includes(value) ? value : STATUS_OPTIONS[0];
 const normalizeDateTime = (value: unknown) => {
@@ -134,10 +200,16 @@ const normalizeProspect = (value: unknown): Prospect | null => {
   if (!isRecord(value) || typeof value.name !== "string") return null;
   const name = value.name.trim();
   if (!name) return null;
+  const id = typeof value.id === "string" && value.id ? value.id : newId();
   return {
+    id,
     name,
     niche: typeof value.niche === "string" ? value.niche.trim() : "",
     status: normalizeStatus(value.status),
+    email: toTrimmedString(value.email),
+    phone: toTrimmedString(value.phone),
+    website: toTrimmedString(value.website),
+    notes: typeof value.notes === "string" ? value.notes : "",
     lastContactedAt: normalizeDateTime(value.lastContactedAt),
   };
 };
@@ -160,6 +232,39 @@ const normalizeDailyActions = (value: unknown): Record<string, DailyActions> => 
       }),
   );
 };
+const normalizeTargets = (value: unknown): Targets => {
+  const fallback = DEFAULT_TARGETS;
+  if (!isRecord(value)) return { ...fallback };
+  return {
+    sent: toPositive(value.sent, fallback.sent),
+    calls: toPositive(value.calls, fallback.calls),
+    closed: toPositive(value.closed, fallback.closed),
+  };
+};
+const normalizeRecentActions = (value: unknown): RecentAction[] => {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry): RecentAction | null => {
+      if (!isRecord(entry)) return null;
+      const type = entry.type;
+      if (type !== "sent" && type !== "calls" && type !== "closed") return null;
+      const prospectId = typeof entry.prospectId === "string" ? entry.prospectId : "";
+      const dateKey = normalizeDateKey(entry.dateKey);
+      if (!prospectId || !dateKey) return null;
+      return {
+        id: typeof entry.id === "string" && entry.id ? entry.id : newId(),
+        prospectId,
+        type,
+        xp: toCount(entry.xp),
+        prevStatus: normalizeStatus(entry.prevStatus),
+        prevLastContactedAt: normalizeDateTime(entry.prevLastContactedAt),
+        dateKey,
+        at: normalizeDateTime(entry.at) || new Date().toISOString(),
+      };
+    })
+    .filter((entry): entry is RecentAction => Boolean(entry))
+    .slice(-MAX_UNDO);
+};
 const normalizeState = (value: unknown): State => {
   const fallback = defaultState();
   if (!isRecord(value)) return fallback;
@@ -178,6 +283,8 @@ const normalizeState = (value: unknown): State => {
     lastCheck: normalizeDateKey(value.lastCheck),
     prospects: prospects ?? fallback.prospects,
     dailyActions: normalizeDailyActions(value.dailyActions),
+    targets: normalizeTargets(value.targets),
+    recentActions: normalizeRecentActions(value.recentActions),
   };
 };
 const formatDate = (value?: string) => {
@@ -186,11 +293,14 @@ const formatDate = (value?: string) => {
   if (Number.isNaN(date.getTime())) return "Never";
   return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date);
 };
-const daysSince = (value?: string) => {
+// Day count uses date-key parity so "today" stays "today" until midnight,
+// rather than flipping based on hours since timestamp.
+const daysSinceKey = (value: string | undefined, baseKey: string) => {
   if (!value) return null;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
-  return Math.floor((Date.now() - date.getTime()) / DAY_MS);
+  const diff = dayDiff(localDateKey(date), baseKey);
+  return diff === null ? null : Math.max(0, diff);
 };
 type Rank = (typeof RANKS)[number];
 const rankFor = (xp: number): { current: Rank; next: Rank | undefined } => {
@@ -239,6 +349,24 @@ const saveStoredState = (state: State) => {
   }
 };
 
+type EditDraft = {
+  name: string;
+  niche: string;
+  email: string;
+  phone: string;
+  website: string;
+  notes: string;
+};
+
+const draftFromProspect = (p: Prospect): EditDraft => ({
+  name: p.name,
+  niche: p.niche,
+  email: p.email ?? "",
+  phone: p.phone ?? "",
+  website: p.website ?? "",
+  notes: p.notes ?? "",
+});
+
 export default function Page() {
   const [state, setState] = useState<State>(defaultState);
   const [hydrated, setHydrated] = useState(false);
@@ -249,9 +377,17 @@ export default function Page() {
   const [search, setSearch] = useState("");
   const [nicheFilter, setNicheFilter] = useState("All");
   const [copiedKey, setCopiedKey] = useState("");
-  const [activeTab, setActiveTab] = useState<"dashboard" | "prospects" | "service" | "alignment">("dashboard");
+  const [activeTab, setActiveTab] = useState<TabKey>("dashboard");
   const [slideDirection, setSlideDirection] = useState(1);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
   const reduceMotion = useReducedMotion();
+  const tabRefs = useRef<Record<TabKey, HTMLButtonElement | null>>({
+    dashboard: null,
+    prospects: null,
+    service: null,
+    alignment: null,
+  });
 
   useEffect(() => {
     setState(loadStoredState());
@@ -283,12 +419,13 @@ export default function Page() {
     }
   }, [hydrated, currentDay, state.lastCheck, state.streak]);
 
+  const targets = state.targets;
   const pct = useMemo(() => {
-    const outreach = Math.min(state.sent / 20, 1) * 60;
-    const calls = Math.min(state.calls / 3, 1) * 30;
-    const close = Math.min(state.closed / 1, 1) * 10;
+    const outreach = Math.min(state.sent / Math.max(1, targets.sent), 1) * 60;
+    const calls = Math.min(state.calls / Math.max(1, targets.calls), 1) * 30;
+    const close = Math.min(state.closed / Math.max(1, targets.closed), 1) * 10;
     return Math.round(outreach + calls + close);
-  }, [state.sent, state.calls, state.closed]);
+  }, [state.sent, state.calls, state.closed, targets]);
 
   const today = currentDay;
   const todayActions = state.dailyActions[today] ?? emptyDailyActions();
@@ -312,14 +449,16 @@ export default function Page() {
           !needle ||
           prospect.name.toLowerCase().includes(needle) ||
           prospect.niche.toLowerCase().includes(needle) ||
-          prospect.status.toLowerCase().includes(needle);
+          prospect.status.toLowerCase().includes(needle) ||
+          (prospect.email ?? "").toLowerCase().includes(needle) ||
+          (prospect.notes ?? "").toLowerCase().includes(needle);
         const matchesNiche = nicheFilter === "All" || prospect.niche === nicheFilter;
         return matchesSearch && matchesNiche;
       });
   }, [state.prospects, search, nicheFilter]);
   const quests = [
-    { title: "Send 5 outreach", current: todayActions.sent, target: 5 },
-    { title: "Book 1 call", current: todayActions.calls, target: 1 },
+    { title: `Send ${targets.sent >= 5 ? 5 : targets.sent} outreach`, current: todayActions.sent, target: Math.max(1, Math.min(5, targets.sent)) },
+    { title: `Book ${Math.max(1, Math.min(targets.calls, 1))} call`, current: todayActions.calls, target: 1 },
     { title: "Close 1 deal", current: todayActions.closed, target: 1 },
     { title: "Daily check-in", current: todayActions.checkIn ? 1 : 0, target: 1 },
   ];
@@ -378,30 +517,87 @@ export default function Page() {
     };
   };
 
-  const logProspectAction = (index: number, type: (typeof QUICK_ACTIONS)[number]["key"]) => {
+  const decrementDailyAction = (actions: Record<string, DailyActions>, key: ActionType, dateKey: string) => {
+    const current = actions[dateKey];
+    if (!current) return actions;
+    return {
+      ...actions,
+      [dateKey]: {
+        ...current,
+        [key]: Math.max(0, toCount(current[key]) - 1),
+      },
+    };
+  };
+
+  const logProspectAction = (prospectId: string, type: ActionType) => {
     const action = QUICK_ACTIONS.find((item) => item.key === type);
     if (!action) return;
     const stampedAt = new Date().toISOString();
     const actionDay = todayKey();
     setCurrentDay(actionDay);
-    setState((s) => ({
-      ...s,
-      xp: s.xp + action.xp,
-      sent: action.key === "sent" ? s.sent + 1 : s.sent,
-      calls: action.key === "calls" ? s.calls + 1 : s.calls,
-      closed: action.key === "closed" ? s.closed + 1 : s.closed,
-      dailyActions: bumpDailyAction(s.dailyActions, action.key, actionDay),
-      prospects: s.prospects.map((prospect, idx) =>
-        idx === index ? { ...prospect, status: action.status, lastContactedAt: stampedAt } : prospect,
-      ),
-    }));
+    setState((s) => {
+      const target = s.prospects.find((p) => p.id === prospectId);
+      if (!target) return s;
+      const entry: RecentAction = {
+        id: newId(),
+        prospectId,
+        type,
+        xp: action.xp,
+        prevStatus: target.status,
+        prevLastContactedAt: target.lastContactedAt ?? "",
+        dateKey: actionDay,
+        at: stampedAt,
+      };
+      return {
+        ...s,
+        xp: s.xp + action.xp,
+        sent: type === "sent" ? s.sent + 1 : s.sent,
+        calls: type === "calls" ? s.calls + 1 : s.calls,
+        closed: type === "closed" ? s.closed + 1 : s.closed,
+        dailyActions: bumpDailyAction(s.dailyActions, type, actionDay),
+        prospects: s.prospects.map((prospect) =>
+          prospect.id === prospectId
+            ? { ...prospect, status: action.status, lastContactedAt: stampedAt }
+            : prospect,
+        ),
+        recentActions: [...s.recentActions, entry].slice(-MAX_UNDO),
+      };
+    });
   };
 
-  const updateProspectStatus = (index: number, status: string) => {
+  const undoLastAction = useCallback(() => {
+    setState((s) => {
+      const last = s.recentActions[s.recentActions.length - 1];
+      if (!last) return s;
+      const target = s.prospects.find((p) => p.id === last.prospectId);
+      return {
+        ...s,
+        xp: Math.max(0, s.xp - last.xp),
+        sent: last.type === "sent" ? Math.max(0, s.sent - 1) : s.sent,
+        calls: last.type === "calls" ? Math.max(0, s.calls - 1) : s.calls,
+        closed: last.type === "closed" ? Math.max(0, s.closed - 1) : s.closed,
+        dailyActions: decrementDailyAction(s.dailyActions, last.type, last.dateKey),
+        prospects: target
+          ? s.prospects.map((prospect) =>
+              prospect.id === last.prospectId
+                ? {
+                    ...prospect,
+                    status: last.prevStatus,
+                    lastContactedAt: last.prevLastContactedAt,
+                  }
+                : prospect,
+            )
+          : s.prospects,
+        recentActions: s.recentActions.slice(0, -1),
+      };
+    });
+  }, []);
+
+  const updateProspectStatus = (id: string, status: string) => {
     setState((s) => ({
       ...s,
-      prospects: s.prospects.map((prospect, idx) =>
-        idx === index ? { ...prospect, status } : prospect,
+      prospects: s.prospects.map((prospect) =>
+        prospect.id === id ? { ...prospect, status } : prospect,
       ),
     }));
   };
@@ -431,14 +627,86 @@ export default function Page() {
     if (!name) return;
     setState((s) => ({
       ...s,
-      prospects: [...s.prospects, { name, niche: bizNiche.trim(), status: bizStatus, lastContactedAt: "" }],
+      prospects: [
+        ...s.prospects,
+        {
+          id: newId(),
+          name,
+          niche: bizNiche.trim(),
+          status: bizStatus,
+          email: "",
+          phone: "",
+          website: "",
+          notes: "",
+          lastContactedAt: "",
+        },
+      ],
     }));
     setBizName("");
     setBizNiche("");
   };
 
-  const removeProspect = (i: number) => {
-    setState((s) => ({ ...s, prospects: s.prospects.filter((_, idx) => idx !== i) }));
+  const removeProspect = (id: string) => {
+    const target = state.prospects.find((p) => p.id === id);
+    const label = target ? target.name : "this prospect";
+    if (typeof window !== "undefined" && !window.confirm(`Remove ${label}? This cannot be undone.`)) {
+      return;
+    }
+    setState((s) => ({
+      ...s,
+      prospects: s.prospects.filter((p) => p.id !== id),
+      // Drop undo entries that referenced the removed prospect.
+      recentActions: s.recentActions.filter((entry) => entry.prospectId !== id),
+    }));
+    if (editingId === id) {
+      setEditingId(null);
+      setEditDraft(null);
+    }
+  };
+
+  const beginEdit = (p: Prospect) => {
+    if (editingId === p.id) {
+      setEditingId(null);
+      setEditDraft(null);
+      return;
+    }
+    setEditingId(p.id);
+    setEditDraft(draftFromProspect(p));
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditDraft(null);
+  };
+
+  const saveEdit = () => {
+    if (!editingId || !editDraft) return;
+    const trimmedName = editDraft.name.trim();
+    if (!trimmedName) return;
+    setState((s) => ({
+      ...s,
+      prospects: s.prospects.map((prospect) =>
+        prospect.id === editingId
+          ? {
+              ...prospect,
+              name: trimmedName,
+              niche: editDraft.niche.trim(),
+              email: editDraft.email.trim(),
+              phone: editDraft.phone.trim(),
+              website: editDraft.website.trim(),
+              notes: editDraft.notes,
+            }
+          : prospect,
+      ),
+    }));
+    setEditingId(null);
+    setEditDraft(null);
+  };
+
+  const updateTarget = (key: keyof Targets, value: number) => {
+    const next = Math.max(1, Math.floor(value));
+    if (!Number.isFinite(next)) return;
+    setState((s) => ({ ...s, targets: { ...s.targets, [key]: next } }));
   };
 
   const xpBar = (
@@ -486,11 +754,11 @@ export default function Page() {
       sub: state.bestStreak ? `Best ${state.bestStreak}d` : "Check in to build it",
       extra: streakStrip,
     },
-    { title: "Outreach Sent", value: state.sent, sub: `${state.sent} / 20 target` },
-    { title: "Calls Booked", value: state.calls, sub: `${state.calls} / 3 target` },
+    { title: "Outreach Sent", value: state.sent, sub: `${state.sent} / ${targets.sent} target` },
+    { title: "Calls Booked", value: state.calls, sub: `${state.calls} / ${targets.calls} target` },
   ];
   const checkedInToday = state.lastCheck === today;
-  const copyTemplate = async (prospect: Prospect, index: number) => {
+  const copyTemplate = async (prospect: Prospect) => {
     const text = templateFor(prospect);
     try {
       if (navigator.clipboard?.writeText) {
@@ -505,10 +773,10 @@ export default function Page() {
         document.execCommand("copy");
         area.remove();
       }
-      setCopiedKey(`${prospect.name}-${index}`);
+      setCopiedKey(`ok-${prospect.id}`);
       window.setTimeout(() => setCopiedKey(""), 1600);
     } catch {
-      setCopiedKey(`failed-${index}`);
+      setCopiedKey(`failed-${prospect.id}`);
       window.setTimeout(() => setCopiedKey(""), 1600);
     }
   };
@@ -520,19 +788,42 @@ export default function Page() {
         animate: { opacity: 1, y: 0 },
       };
 
-  const switchTab = (nextTab: "dashboard" | "prospects" | "service" | "alignment") => {
+  const switchTab = (nextTab: TabKey) => {
     if (nextTab === activeTab) return;
-    const order: Array<"dashboard" | "prospects" | "service" | "alignment"> = [
-      "dashboard",
-      "prospects",
-      "service",
-      "alignment",
-    ];
-    const currentIndex = order.indexOf(activeTab);
-    const nextIndex = order.indexOf(nextTab);
+    const currentIndex = TAB_ORDER.indexOf(activeTab);
+    const nextIndex = TAB_ORDER.indexOf(nextTab);
     setSlideDirection(nextIndex > currentIndex ? 1 : -1);
     setActiveTab(nextTab);
   };
+
+  const handleTabKey = (event: KeyboardEvent<HTMLButtonElement>, currentTab: TabKey) => {
+    const currentIndex = TAB_ORDER.indexOf(currentTab);
+    let nextIndex = currentIndex;
+    if (event.key === "ArrowRight") {
+      nextIndex = (currentIndex + 1) % TAB_ORDER.length;
+    } else if (event.key === "ArrowLeft") {
+      nextIndex = (currentIndex - 1 + TAB_ORDER.length) % TAB_ORDER.length;
+    } else if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = TAB_ORDER.length - 1;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    const nextTab = TAB_ORDER[nextIndex];
+    switchTab(nextTab);
+    tabRefs.current[nextTab]?.focus();
+  };
+
+  const lastAction = state.recentActions[state.recentActions.length - 1];
+  const lastActionLabel = lastAction
+    ? (() => {
+        const prospect = state.prospects.find((p) => p.id === lastAction.prospectId);
+        const verb = lastAction.type === "sent" ? "Sent" : lastAction.type === "calls" ? "Call" : "Close";
+        return prospect ? `Undo ${verb} · ${prospect.name}` : `Undo ${verb}`;
+      })()
+    : null;
 
   return (
     <div className="wrap">
@@ -552,7 +843,11 @@ export default function Page() {
             {rank.name} · L{levelFromXP(state.xp)} · {state.xp} XP
           </motion.span>
         </div>
-        <p>Goal: contact 20 businesses, book 3 calls, close 1 paid audit.</p>
+        <p>
+          Goal: contact {targets.sent} businesses, book {targets.calls} call
+          {targets.calls === 1 ? "" : "s"}, close {targets.closed} paid audit
+          {targets.closed === 1 ? "" : "s"}.
+        </p>
       </header>
 
       <section className="grid" aria-label="Key stats">
@@ -581,46 +876,34 @@ export default function Page() {
       </section>
 
       <div className="viewTabs" role="tablist" aria-label="Dashboard views">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === "dashboard"}
-          aria-controls="view-panel-dashboard"
-          className={`tabBtn${activeTab === "dashboard" ? " active" : ""}`}
-          onClick={() => switchTab("dashboard")}
-        >
-          Dashboard
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === "prospects"}
-          aria-controls="view-panel-prospects"
-          className={`tabBtn${activeTab === "prospects" ? " active" : ""}`}
-          onClick={() => switchTab("prospects")}
-        >
-          Prospect Tracker
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === "service"}
-          aria-controls="view-panel-service"
-          className={`tabBtn${activeTab === "service" ? " active" : ""}`}
-          onClick={() => switchTab("service")}
-        >
-          Call Script
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === "alignment"}
-          aria-controls="view-panel-alignment"
-          className={`tabBtn${activeTab === "alignment" ? " active" : ""}`}
-          onClick={() => switchTab("alignment")}
-        >
-          Alignment
-        </button>
+        {TAB_ORDER.map((tab) => {
+          const labels: Record<TabKey, string> = {
+            dashboard: "Dashboard",
+            prospects: "Prospect Tracker",
+            service: "Call Script",
+            alignment: "Alignment",
+          };
+          const isActive = activeTab === tab;
+          return (
+            <button
+              key={tab}
+              ref={(el) => {
+                tabRefs.current[tab] = el;
+              }}
+              type="button"
+              role="tab"
+              id={`tab-${tab}`}
+              aria-selected={isActive}
+              aria-controls={`view-panel-${tab}`}
+              tabIndex={isActive ? 0 : -1}
+              className={`tabBtn${isActive ? " active" : ""}`}
+              onClick={() => switchTab(tab)}
+              onKeyDown={(event) => handleTabKey(event, tab)}
+            >
+              {labels[tab]}
+            </button>
+          );
+        })}
       </div>
 
       <AnimatePresence initial={false} mode="wait" custom={slideDirection}>
@@ -629,7 +912,7 @@ export default function Page() {
             key="dashboard"
             id="view-panel-dashboard"
             role="tabpanel"
-            aria-label="Dashboard view"
+            aria-labelledby="tab-dashboard"
             className="tabPanel"
             custom={slideDirection}
             initial={
@@ -682,7 +965,38 @@ export default function Page() {
           </div>
         </div>
 
-        <div className="row">
+        <fieldset className="targetsEditor" aria-label="Mission targets">
+          <legend className="muted">Targets</legend>
+          <label className="targetField">
+            <span>Sent</span>
+            <input
+              type="number"
+              min={1}
+              value={targets.sent}
+              onChange={(e) => updateTarget("sent", Number(e.target.value))}
+            />
+          </label>
+          <label className="targetField">
+            <span>Calls</span>
+            <input
+              type="number"
+              min={1}
+              value={targets.calls}
+              onChange={(e) => updateTarget("calls", Number(e.target.value))}
+            />
+          </label>
+          <label className="targetField">
+            <span>Closed</span>
+            <input
+              type="number"
+              min={1}
+              value={targets.closed}
+              onChange={(e) => updateTarget("closed", Number(e.target.value))}
+            />
+          </label>
+        </fieldset>
+
+        <div className="row mission-actions">
           <motion.button
             type="button"
             className="secondary"
@@ -693,6 +1007,17 @@ export default function Page() {
           >
             {checkedInToday ? "Checked in today" : "Daily Check-in (+5 XP)"}
           </motion.button>
+          {lastAction && lastActionLabel ? (
+            <motion.button
+              type="button"
+              className="secondary"
+              onClick={undoLastAction}
+              aria-label={`Undo last action: ${lastActionLabel}`}
+              whileTap={reduceMotion ? undefined : { scale: 0.97 }}
+            >
+              {lastActionLabel} (−{lastAction.xp} XP)
+            </motion.button>
+          ) : null}
         </div>
       </motion.section>
 
@@ -834,7 +1159,7 @@ export default function Page() {
             key="prospects"
             id="view-panel-prospects"
             role="tabpanel"
-            aria-label="Prospect tracker view"
+            aria-labelledby="tab-prospects"
             className="tabPanel"
             custom={slideDirection}
             initial={
@@ -885,7 +1210,7 @@ export default function Page() {
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by name, niche, or status"
+            placeholder="Search by name, niche, status, email, or notes"
             aria-label="Search prospects"
           />
           <select
@@ -910,21 +1235,23 @@ export default function Page() {
                 <th scope="col">Last Contact</th>
                 <th scope="col">Log</th>
                 <th scope="col">Template</th>
+                <th scope="col">Edit</th>
                 <th scope="col">Action</th>
               </tr>
             </thead>
             <tbody>
               <AnimatePresence initial={false}>
-                {visibleProspects.map(({ prospect: p, index: i }) => {
-                  const age = daysSince(p.lastContactedAt);
+                {visibleProspects.map(({ prospect: p }) => {
+                  const age = daysSinceKey(p.lastContactedAt, today);
                   const actionable = p.status !== "Closed" && p.status !== "Not Contacted";
                   const overdue = actionable && age !== null && age > 3;
-                  const copied = copiedKey === `${p.name}-${i}`;
-                  const copyFailed = copiedKey === `failed-${i}`;
+                  const copied = copiedKey === `ok-${p.id}`;
+                  const copyFailed = copiedKey === `failed-${p.id}`;
                   const statusClass = p.status.toLowerCase().replace(/\s+/g, "-");
+                  const isEditing = editingId === p.id;
                   return (
                     <motion.tr
-                      key={`${p.name}-${i}`}
+                      key={p.id}
                       layout
                       initial={reduceMotion ? false : { opacity: 0, y: 6 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -932,7 +1259,27 @@ export default function Page() {
                       transition={{ duration: 0.22, ease: "easeOut" }}
                       className={`row-${statusClass}`}
                     >
-                      <td>{p.name}</td>
+                      <td>
+                        <div className="prospectName">
+                          <span>{p.name}</span>
+                          {p.website ? (
+                            <a
+                              className="prospectLink"
+                              href={p.website.startsWith("http") ? p.website : `https://${p.website}`}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              site
+                            </a>
+                          ) : null}
+                          {p.email ? (
+                            <a className="prospectLink" href={`mailto:${p.email}`}>email</a>
+                          ) : null}
+                          {p.phone ? (
+                            <a className="prospectLink" href={`tel:${p.phone.replace(/[^+\d]/g, "")}`}>call</a>
+                          ) : null}
+                        </div>
+                      </td>
                       <td>
                         <span className="tag">{p.niche || "None"}</span>
                       </td>
@@ -954,7 +1301,7 @@ export default function Page() {
                           />
                           <select
                             value={p.status}
-                            onChange={(e) => updateProspectStatus(i, e.target.value)}
+                            onChange={(e) => updateProspectStatus(p.id, e.target.value)}
                             aria-label={`Status for ${p.name}`}
                           >
                             {STATUS_OPTIONS.map((status) => (
@@ -978,7 +1325,7 @@ export default function Page() {
                               type="button"
                               key={action.key}
                               className="tiny"
-                              onClick={() => logProspectAction(i, action.key)}
+                              onClick={() => logProspectAction(p.id, action.key)}
                               aria-label={`Log ${action.label} for ${p.name}`}
                               whileTap={reduceMotion ? undefined : { scale: 0.94 }}
                             >
@@ -991,7 +1338,7 @@ export default function Page() {
                         <button
                           type="button"
                           className="secondary"
-                          onClick={() => copyTemplate(p, i)}
+                          onClick={() => copyTemplate(p)}
                           aria-label={`Copy outreach template for ${p.name}`}
                         >
                           Copy
@@ -1027,7 +1374,18 @@ export default function Page() {
                         <button
                           type="button"
                           className="secondary"
-                          onClick={() => removeProspect(i)}
+                          onClick={() => beginEdit(p)}
+                          aria-expanded={isEditing}
+                          aria-label={isEditing ? `Close edit form for ${p.name}` : `Edit ${p.name}`}
+                        >
+                          {isEditing ? "Close" : "Edit"}
+                        </button>
+                      </td>
+                      <td>
+                        <button
+                          type="button"
+                          className="secondary"
+                          onClick={() => removeProspect(p.id)}
                           aria-label={`Remove ${p.name}`}
                         >
                           Remove
@@ -1036,6 +1394,101 @@ export default function Page() {
                     </motion.tr>
                   );
                 })}
+              </AnimatePresence>
+              <AnimatePresence initial={false}>
+                {editingId && editDraft
+                  ? (() => {
+                      const target = state.prospects.find((p) => p.id === editingId);
+                      if (!target) return null;
+                      const visibleIndex = visibleProspects.findIndex(
+                        ({ prospect }) => prospect.id === editingId,
+                      );
+                      if (visibleIndex === -1) return null;
+                      return (
+                        <motion.tr
+                          key={`edit-${editingId}`}
+                          className="editRow"
+                          initial={reduceMotion ? false : { opacity: 0, y: -6 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={reduceMotion ? undefined : { opacity: 0, y: -6 }}
+                          transition={{ duration: 0.2, ease: "easeOut" }}
+                        >
+                          <td colSpan={8}>
+                            <div className="editForm" aria-label={`Edit ${target.name}`}>
+                              <label className="editField">
+                                <span>Name</span>
+                                <input
+                                  value={editDraft.name}
+                                  onChange={(e) =>
+                                    setEditDraft((d) => (d ? { ...d, name: e.target.value } : d))
+                                  }
+                                />
+                              </label>
+                              <label className="editField">
+                                <span>Niche</span>
+                                <input
+                                  value={editDraft.niche}
+                                  onChange={(e) =>
+                                    setEditDraft((d) => (d ? { ...d, niche: e.target.value } : d))
+                                  }
+                                />
+                              </label>
+                              <label className="editField">
+                                <span>Email</span>
+                                <input
+                                  type="email"
+                                  value={editDraft.email}
+                                  onChange={(e) =>
+                                    setEditDraft((d) => (d ? { ...d, email: e.target.value } : d))
+                                  }
+                                />
+                              </label>
+                              <label className="editField">
+                                <span>Phone</span>
+                                <input
+                                  type="tel"
+                                  value={editDraft.phone}
+                                  onChange={(e) =>
+                                    setEditDraft((d) => (d ? { ...d, phone: e.target.value } : d))
+                                  }
+                                />
+                              </label>
+                              <label className="editField wide">
+                                <span>Website</span>
+                                <input
+                                  type="url"
+                                  value={editDraft.website}
+                                  onChange={(e) =>
+                                    setEditDraft((d) => (d ? { ...d, website: e.target.value } : d))
+                                  }
+                                  placeholder="https://"
+                                />
+                              </label>
+                              <label className="editField wide">
+                                <span>Notes</span>
+                                <textarea
+                                  rows={3}
+                                  value={editDraft.notes}
+                                  onChange={(e) =>
+                                    setEditDraft((d) => (d ? { ...d, notes: e.target.value } : d))
+                                  }
+                                  placeholder="Last conversation, follow-up details, objections…"
+                                />
+                              </label>
+                              <div className="editActions">
+                                <button type="button" onClick={saveEdit} disabled={!editDraft.name.trim()}>
+                                  Save
+                                </button>
+                                <button type="button" className="secondary" onClick={cancelEdit}>
+                                  Cancel
+                                </button>
+                              </div>
+                            </div>
+                          </td>
+                        </motion.tr>
+                      );
+                    })()
+                  : null}
               </AnimatePresence>
             </tbody>
           </table>
@@ -1047,7 +1500,7 @@ export default function Page() {
             key="service"
             id="view-panel-service"
             role="tabpanel"
-            aria-label="Service call script view"
+            aria-labelledby="tab-service"
             className="tabPanel"
             custom={slideDirection}
             initial={
@@ -1115,7 +1568,7 @@ export default function Page() {
             key="alignment"
             id="view-panel-alignment"
             role="tabpanel"
-            aria-label="Belief and alignment view"
+            aria-labelledby="tab-alignment"
             className="tabPanel"
             custom={slideDirection}
             initial={
