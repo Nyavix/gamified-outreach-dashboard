@@ -848,6 +848,115 @@ tbody tr.row-closed td:first-child {
   border-color: transparent;
 }
 
+/* Targets editor (Mission card) */
+.targetsEditor {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: rgba(11, 16, 36, 0.4);
+}
+.targetsEditor legend {
+  padding: 0 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+.targetField {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 110px;
+}
+.targetField span {
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+}
+.targetField input {
+  width: 80px;
+  min-height: 34px;
+  padding: 6px 8px;
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.mission-actions { gap: 10px; }
+
+/* Prospect name + quick links */
+.prospectName {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.prospectLink {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px dashed rgba(91, 155, 255, 0.45);
+  padding-bottom: 1px;
+}
+.prospectLink:hover { color: #fff; border-bottom-color: var(--accent); }
+
+/* Edit row + form */
+tbody tr.editRow td {
+  background: rgba(11, 16, 36, 0.6);
+  border-top: 1px solid var(--line-strong);
+  padding: 14px 16px;
+}
+.editForm {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px 14px;
+}
+.editField {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.editField span {
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+.editField.wide { grid-column: 1 / -1; }
+.editField textarea {
+  background: rgba(11, 16, 36, 0.7);
+  color: var(--text);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r);
+  padding: 9px 12px;
+  font: inherit;
+  font-size: var(--fs-base);
+  resize: vertical;
+  min-height: 64px;
+  transition: border-color 0.18s var(--ease), background 0.18s var(--ease), box-shadow 0.18s var(--ease);
+}
+.editField textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  background: rgba(11, 16, 36, 0.95);
+}
+.editActions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
 /* Reduced motion */
 @media (prefers-reduced-motion: reduce) {
   *, ::before, ::after {
